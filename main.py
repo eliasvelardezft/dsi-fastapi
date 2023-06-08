@@ -1,14 +1,10 @@
 from datetime import datetime
-
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
-
+from functools import lru_cache
+from fastapi import FastAPI, Depends
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from typing import Annotated
 
 app = FastAPI()
-
-@app.get("/")
-def read_root():
-    return {"Hello": "asd"}
 
 
 class Estado:
@@ -33,6 +29,8 @@ class Estado:
 
 
 class CambioEstado:
+    fechaHoraFin: str | None = None
+
     def __init__(self, nuevoEstado: Estado, fechaHora: datetime):
         self.setEstado(nuevoEstado)
         self.setFechaHoraInicio(fechaHora)
@@ -48,6 +46,12 @@ class CambioEstado:
     
     def getEstado(self):
         return self.estado
+    
+    def getFechaHoraFin(self):
+        return self.fechaHoraFin
+
+    def getFechaHoraInicio(self):
+        return self.fechaHoraInicio
 
     def esEnCurso(self):
         return self.getEstado().esEnCurso()
@@ -57,6 +61,16 @@ class CambioEstado:
 
 
 class OpcionValidacion:
+    def __init__(self, descripcion: str, correcta: bool):
+        self.setDescripcion(descripcion)
+        self.setCorrecta(correcta)
+
+    def setDescripcion(self, descripcion: str):
+        self.descripcion = descripcion
+
+    def setCorrecta(self, correcta: bool):
+        self.correcta = correcta
+
     def getDescripcion(self) -> str:
         return self.descripcion
 
@@ -65,8 +79,38 @@ class OpcionValidacion:
 
 
 class InformacionCliente:
-    def __init__(self, datoAValidar: str):
+    def __init__(self, datoAValidar: str, validacion, opcionValidacion: OpcionValidacion):
+        self.setOpcionValidacion(opcionValidacion)
+        self.setValidacion(validacion)
         self.setDatoAValidar(datoAValidar)
+
+    # TODO: REVISAR DONDE PONER ESTO
+    @classmethod
+    def getTodosLosObjetos(cls):
+        return [
+            cls(
+                "Fecha de nacimiento",
+                Validacion("Fecha de nacimiento", 1),
+                OpcionValidacion("24/06/1987", True),
+            ),
+            cls(
+                "Cantidad de hijos",
+                Validacion("Cantidad de hijos", 2),
+                OpcionValidacion("2", True)
+            ),
+        ]
+
+    def setOpcionValidacion(self, opcionValidacion: OpcionValidacion):
+        self.opcionValidacion = opcionValidacion
+    
+    def setValidacion(self, validacion):
+        self.validacion = validacion
+
+    def getValidacion(self):
+        return self.validacion
+
+    def esValidacion(self, validacion):
+        return self.getValidacion().getNombre() == validacion.getNombre()
 
     def setDatoAValidar(self, datoAValidar: str):
         self.datoAValidar = datoAValidar
@@ -83,11 +127,27 @@ class InformacionCliente:
 
 
 class Cliente:
+    def __init__(self, nombre: str):
+        self.setNombre(nombre)
+
+    def setNombre(self, nombre: str):
+        self.nombre = nombre
+
     def getNombre(self) -> str:
         return self.nombre
 
 
 class Validacion:
+    def __init__(self, nombre: str, nroOrden: int):
+        self.setNombre(nombre)
+        self.setNroOrden(nroOrden)
+
+    def setNombre(self, nombre: str):
+        self.nombre = nombre
+
+    def setNroOrden(self, nroOrden: int):
+        self.nroOrden = nroOrden
+
     def getNroOrden(self) -> int:
         return self.nroOrden
 
@@ -105,7 +165,9 @@ class Validacion:
 
 
 class SubOpcionLlamada:
-    def __init__(self, nombre: str):
+    validaciones: list[Validacion] = []
+    def __init__(self, nombre: str, validaciones: list[Validacion]):
+        self.setValidaciones(validaciones)
         self.setNombre(nombre)
 
     def setNombre(self, nombre: str):
@@ -114,8 +176,16 @@ class SubOpcionLlamada:
     def getNombre(self) -> str:
         return self.nombre
 
+    def setValidaciones(self, validaciones: list[Validacion]):
+        self.validaciones = validaciones
+
     def getValidaciones(self) -> list[Validacion]:
         return self.validaciones
+
+    def getValidacionPorNombre(self, nombre: str) -> Validacion:
+        for validacion in self.getValidaciones():
+            if validacion.getNombre() == nombre:
+                return validacion
 
 
 class OpcionLlamada:
@@ -130,6 +200,8 @@ class OpcionLlamada:
 
 
 class Llamada:
+    cambiosDeEstado: list[CambioEstado] = [CambioEstado(Estado("iniciada"), datetime.now())]
+
     def __init__(
         self,
         subOpcionLlamada: SubOpcionLlamada,
@@ -137,8 +209,6 @@ class Llamada:
     ):
         self.setSubOpcionLlamada(subOpcionLlamada)
         self.setCliente(cliente)
-        self.cambiosDeEstado = []
-        self.crearCambioEstado(Estado("enCurso"), datetime.now())
 
     def setSubOpcionLlamada(self, subOpcionLlamada: SubOpcionLlamada):
         self.subOpcionLlamada = subOpcionLlamada
@@ -155,7 +225,6 @@ class Llamada:
 
         # CambioEstado.new()
         nuevoEstado = CambioEstado(nuevoEstado, fechaHora)
-
         self.appendCambioEstado(nuevoEstado)
 
     def appendCambioEstado(self, cambioEstado: CambioEstado):
@@ -210,91 +279,12 @@ class CategoriaLlamada:
         return self.nombre
 
 
-
-class PantallaOperador:
-    def getHtml(self) -> str:
-        return self.html
-    
-    def setHtml(self, html: str):
-        self.html = html
-
-    def mostrarDatosLlamada(self, datosLlamada: dict):
-        html = '<h3>Datos de la llamada</h3>'
-        for dato in datosLlamada:
-            html += f'<p>{dato}</p>'
-
-        self.setHtml(self, html)
-        self.habilitarVentana()
-
-    def mostrarValidaciones(self, validaciones: list[Validacion]):
-        html = '<h3>Validaciones</h3>'
-        for validacion in validaciones:
-            html += f'<p>{validacion.getNombre()}</p>'
-        
-        html = self.getHtml() + html
-        self.setHtml(self, html)
-    
-        self.habilitarVentana()
-
-    def pedirRespuestaValidacion(self, validacion: Validacion):
-        html = f"""
-            <form action="/tomar-respuesta-validacion" method="POST" style="margin: 25px" target="_blank">
-                <h3>Validacion: {validacion.getNombre()}</h3>
-                <div>
-                    <input type="text" name="respuesta">
-                    <input type="submit" style="margin-left: 25px" value="Validar">
-                </div>
-            </form>
-        """
-        html += '<input type="text" name="respuestaValidacion" />'
-
-        self.setHtml(self, html)
-        self.habilitarVentana()
-
-    @app.get("/tomar-respuesta-validacion")
-    def tomarRespuestaValidacion(self, respuesta: str):
-        self.validarRespuesta(respuesta)
-        GestorRegistrarRespuestaOperador.tomarRespuestaValidacion(respuesta)
-        return JSONResponse(content={"message": "Respuesta validacion tomada"}, status_code=200)
-
-    def pedirRespuesta(self):
-        html = f"""
-            <form action="/tomar-respuesta" method="POST" style="margin: 25px" target="_blank">
-                <h3>Respuesta a la consulta del cliente</h3>
-                <div>
-                    <input type="text" name="respuesta">
-                    <input type="submit" style="margin-left: 25px" value="Enviar">
-                </div>
-            </form>
-        """
-        html += '<input type="text" name="respuesta" />'
-
-        self.setHtml(self, html)
-        self.habilitarVentana()
-
-    def informarExitoRegistroAccionRequerida(self):
-        html = '<h3>Se registro la accion requerida correctamente</h3>'
-        self.setHtml(self, html)
-        self.habilitarVentana()
-
-    @app.get("/tomar-respuesta")
-    def tomarRespuesta(self, respuesta: str):
-        GestorRegistrarRespuestaOperador.tomarRespuesta(respuesta)
-        return JSONResponse(content={"message": "Respuesta tomada"}, status_code=200)
-
-    @app.get("/pantalla-operador")
-    def habilitarVentana(self):
-        return HTMLResponse(content=self.getHtml())
-
 class Accion:
-    def __init__(self, nombre: str):
-        self.setNombre(nombre)
+    def __init__(self, descripcion: str):
+        self.setDescripcion(descripcion)
 
-    def setNombre(self, nombre: str):
-        self.nombre = nombre
-
-    def getNombre(self) -> str:
-        return self.nombre
+    def setDescripcion(self, descripcion: str):
+        self.descripcion = descripcion
 
     def getDescripcion(self) -> str:
         return self.descripcion
@@ -306,17 +296,25 @@ class GestorRegistrarAccionRequerida:
         return True
 
 
+from fastapi import Form, Body, Request
+from fastapi.testclient import TestClient
+from typing import Any
+import requests
+
 class GestorRegistrarRespuestaOperador:
-    def __init__(self, pantallaOperador: PantallaOperador):
+    accionSeleccionada: Accion | None = None
+    descripcionOperador: Accion | None = None
+
+    def __init__(self, pantallaOperador):
         self.setPantallaOperador(pantallaOperador)
         self.acciones = [
             Accion("Cancelar tarjeta"),
             Accion("Reintegrar dinero"),
         ]
-        self.informacionesCliente = [
-            InformacionCliente("Fecha de nacimiento"),
-            InformacionCliente("Cantidad de hijos"),
-        ]
+        # self.informacionesCliente = [
+        #     InformacionCliente("Fecha de nacimiento"),
+        #     InformacionCliente("Cantidad de hijos"),
+        # ]
         self.estados = [
             Estado("iniciada"),
             Estado("enCurso"),
@@ -326,16 +324,16 @@ class GestorRegistrarRespuestaOperador:
     def getEstados(self) -> list[Estado]:
         return self.estados
     
-    def getInformacionesCliente(self) -> list[InformacionCliente]:
-        return self.informacionesCliente
+    # def getInformacionesCliente(self) -> list[InformacionCliente]:
+    #     return self.informacionesCliente
     
     def getAcciones(self) -> list[Accion]:
         return self.acciones
 
-    def setPantallaOperador(self, pantallaOperador: PantallaOperador):
+    def setPantallaOperador(self, pantallaOperador):
         self.pantallaOperador = pantallaOperador
 
-    def getPantallaOperador(self) -> PantallaOperador:
+    def getPantallaOperador(self):
         return self.pantallaOperador
 
     def setLlamada(self, llamada: Llamada):
@@ -344,8 +342,8 @@ class GestorRegistrarRespuestaOperador:
     def setCategoriaLlamada(self, categoriaLlamada: CategoriaLlamada):
         self.categoriaLlamada = categoriaLlamada
 
-    def setSubOpcionLlamada(self, subOpcionllamada: SubOpcionLlamada):
-        self.subOpcionllamada = subOpcionllamada
+    def setSubOpcionLlamada(self, subOpcionLlamada: SubOpcionLlamada):
+        self.subOpcionLlamada = subOpcionLlamada
 
     def setOpcionLlamada(self, opcionllamada: OpcionLlamada):
         self.opcionllamada = opcionllamada
@@ -357,7 +355,7 @@ class GestorRegistrarRespuestaOperador:
         return self.categoriaLlamada
     
     def getSubOpcionLlamada(self) -> SubOpcionLlamada:
-        return self.subOpcionllamada
+        return self.subOpcionLlamada
     
     def getOpcionLlamada(self) -> OpcionLlamada:
         return self.opcionllamada
@@ -377,8 +375,12 @@ class GestorRegistrarRespuestaOperador:
     def getUltimaRespuestaValidacion(self):
         return self.ultimaRespuestaValidacion
 
-    def tomarRespuestaValidacion(self, respuesta: str):
-        self.setUltimaRespuestaValidacion(respuesta)
+    def tomarRespuestasValidaciones(self, respuestas: dict[str, str]):
+        errores = {}
+        for respuestaValidacion in respuestas.items():
+            errores[respuestaValidacion[0]] = self.validarRespuesta(respuestaValidacion)
+        validaciones = self.getSubOpcionLlamada().getValidaciones()
+        return validaciones, errores
 
     def setDescripcionOperador(self, respuesta: str):
         self.descripcionOperador = respuesta
@@ -389,11 +391,10 @@ class GestorRegistrarRespuestaOperador:
     def getDescripcionOperador(self) -> str:
         return self.descripcionOperador
 
-    def validarRespuesta(self, validacion: Validacion, respuesta: str):
-        return validacion.validarRespuesta(respuesta)
-
-    def buscarAcciones(self) -> list[Accion]:
-        return [accion.getDescripcion() for accion in self.getAcciones()]
+    def validarRespuesta(self, respuestaValidacion: dict) -> dict[str, str]:
+        validacion = self.getSubOpcionLlamada().getValidacionPorNombre(respuestaValidacion[0])
+        esCorrecta = validacion.validarRespuesta(respuestaValidacion[1])
+        return esCorrecta
 
     def getAccionSeleccionada(self) -> Accion:
         return self.accionSeleccionada
@@ -412,10 +413,9 @@ class GestorRegistrarRespuestaOperador:
         pantallaOperador = self.getPantallaOperador()
         pantallaOperador.informarExitoRegistroAccionRequerida()
 
-        estadoFinalizada = self.buscarEstadoParaAsignar("Finalizada")
+        estadoFinalizada = self.buscarEstadoParaAsignar("finalizada")
         fechaHoraActual = self.obtenerFechaHoraActual()
         llamada = self.getLlamada()
-
         llamada.crearCambioEstado(estadoFinalizada, fechaHoraActual)
 
         llamada.setOpcionSeleccionada(self.getOpcionLlamada())
@@ -425,7 +425,13 @@ class GestorRegistrarRespuestaOperador:
         duracion = llamada.calcularDuracion()
         llamada.setDuracion(duracion)
 
-    def finCu():
+    def setValidacionesOrdenadas(self, validacionesOrdenadas: list[Validacion]):
+        self.validacionesOrdenadas = validacionesOrdenadas
+
+    def getValidacionesOrdenadas(self) -> list[Validacion]:
+        return self.validacionesOrdenadas
+
+    def finCu(self):
         pass        
     
     def comunicarseConOperador(
@@ -439,6 +445,7 @@ class GestorRegistrarRespuestaOperador:
         self.setCategoriaLlamada(categoriaLlamada)
         self.setOpcionLlamada(opcionLlamada)
         self.setSubOpcionLlamada(subOpcionLlamada)
+
         pantallaOperador = self.getPantallaOperador()
 
         estadoEnCurso = self.buscarEstadoParaAsignar("enCurso")
@@ -451,29 +458,30 @@ class GestorRegistrarRespuestaOperador:
         datosLlamada = self.getDatosLlamada()
         validaciones = llamada.getValidaciones()
 
-        pantallaOperador.mostrarDatosLlamada(datosLlamada)
+        pantallaOperador.mostrarDatosLlamada(datosLlamada, gestor=self)
 
         validacionesOrdenadas = self.ordernarValidaciones(validaciones)
+        self.setValidacionesOrdenadas(validacionesOrdenadas)
         pantallaOperador.mostrarValidaciones(validacionesOrdenadas)
 
-        for validacion in validacionesOrdenadas:
-            pantallaOperador.pedirRespuestaValidacion(validacion)
-            if not self.validarRespuesta(self.getUltimaRespuestaValidacion()):
-                raise Exception(
-                    "Respuesta invalida",
-                    nombreValidacion=validacion.getNombre()
-                )
+        # for validacion in validacionesOrdenadas:
+        #     pantallaOperador.pedirRespuestaValidacion(validacion)
+            # if not self.validarRespuesta(self.getUltimaRespuestaValidacion()):
+            #     raise Exception(
+            #         "Respuesta invalida",
+            #         nombreValidacion=validacion.getNombre()
+            #     )
         
-        pantallaOperador.pedirRespuesta()
+        # pantallaOperador.pedirRespuesta()
 
-        acciones = self.buscarAcciones()
+        # acciones = self.buscarAcciones()
         
-        pantallaOperador.pedirSeleccionAccionRequerida(acciones)
-        pantallaOperador.solicitarConfirmacion()
+        # # pantallaOperador.pedirSeleccionAccionRequerida(acciones)
+        # # pantallaOperador.solicitarConfirmacion()
 
-        self.registrarFinLlamada()
+        # self.registrarFinLlamada()
 
-        self.finCu()
+        # self.finCu()
 
 
     def getDatosLlamada(self):
@@ -510,38 +518,175 @@ class GestorRegistrarRespuestaOperador:
         return datetime.datetime.now()
 
 
+@lru_cache
+def get_gestor():
+    pantallaOperador = PantallaOperador()
+    return GestorRegistrarRespuestaOperador(pantallaOperador)
 
-# if __name__ == "__main__":
-#     pantallaOperador = PantallaOperador()
-#     gestorRegistrarRespuestaOperador = GestorRegistrarRespuestaOperador(pantallaOperador)
 
-#     # agregar parametros
-#     llamada = Llamada()
-#     categoriaLlamada = CategoriaLlamada()
-#     opcionLlamada = OpcionLlamada()
-#     subOpcionLlamada = SubOpcionLlamada()
+class PantallaOperador:
+    titulo: str = "<h1>IVR</h1>"
+    datosLlamadaHtml: str = "<h1>Datos de la llamada</h1>"
+    validacionesHtml: str = "<h1>Validaciones</h1>"
+    accionesHtml: str = "<h1>Acciones</h1>"
 
-#     gestorRegistrarRespuestaOperador.comunicarseConOperador(
-#         llamada=llamada,
-#         categoriaLlamada=categoriaLlamada,
-#         opcionLlamada=opcionLlamada,
-#         subOpcionLlamada=subOpcionLlamada
-#     )
+    def mostrarDatosLlamada(self, datosLlamada: dict, gestor):
+        datosLlamadaHtml = f"""
+            <ul>
+                <li>Nombre del cliente: {datosLlamada["nombreCliente"]}</li>
+                <li>Categoria de la llamada: {datosLlamada["nombreCategoriaLlamada"]}</li>
+                <li>Opcion de la llamada: {datosLlamada["nombreOpcionLlamada"]}</li>
+                <li>Sub opcion de la llamada: {datosLlamada["nombreSubOpcionLlamada"]}</li>
+            </ul>"""
+        self.datosLlamadaHtml = datosLlamadaHtml
+
+    def mostrarValidaciones(self, validaciones: list[Validacion], errores: dict = {}):
+        validacionesHtml = """
+            <form action="/tomar-respuesta-validacion" method="POST" 
+            style="margin: 25px">
+        """
+        ambasCorrectas = all(errores.values()) if errores else False
+        ambasCorrectasHtml = f"""<p style="color: green">Validado</p>""" if ambasCorrectas else ""
+        if ambasCorrectas:
+            validacionesHtml = ambasCorrectasHtml
+        else:
+            for validacion in validaciones:
+                esCorrecta = errores.get(validacion.getNombre(), None)
+                errorHtml = f"""<p style="color: red">Incorrecta</p>""" if esCorrecta is False else ""
+                validacionesHtml += f"""<h3>Validacion: {validacion.getNombre()}</h3>
+                        {errorHtml}
+                        <input type="text" name="{validacion.getNombre()}" id="{validacion.getNombre()}">
+                    """
+            validacionesHtml += """<input type="submit" style="margin-left: 25px" value="Validar">
+                </form>
+            """
+        self.validacionesHtml = validacionesHtml
+
+    def pedirRespuestaOperador(self, fueTomada = False, gestor = None):
+        if not fueTomada:
+            respuestaOperadorHtml = """     
+                    <form action="/tomar-respuesta-operador" method="POST" style="margin: 25px">
+                        <h3>Respuesta del operador:</h3>
+                        <input type="text" name="respuestaOperador" id="respuestaOperador">
+                        <input type="submit" style="margin-left: 25px" value="Enviar">
+                    </form>
+                """
+        else:
+            respuestaOperadorHtml = f"""
+                <p style="color: green">Respuesta del operador tomada: {gestor.getDescripcionOperador()}</p>
+            """
+        self.respuestaOperadorHtml = respuestaOperadorHtml
+
+    def pedirSeleccionAccionRequerida(
+            self,
+            acciones: list[Accion],
+            fueSeleccionada: bool = False,
+            gestor = None,
+        ):
+        if not fueSeleccionada:
+            accionesHtml = """
+                <form action="/tomar-accion-requerida" method="POST" style="margin: 25px">
+                    <h3>Seleccione una acción requerida:</h3>
+                    <select name="accionSeleccionada">
+            """
+            for accion in acciones:
+                accionesHtml += f'<option value="{accion.getDescripcion()}">{accion.getDescripcion()}</option>'
+
+            accionesHtml += """
+                    </select>
+                    <input type="submit" style="margin-left: 25px" value="Seleccionar">
+                </form>
+            """
+        else:
+            accionesHtml = f"""
+                <p style="color: green">Acción requerida seleccionada: {gestor.getAccionSeleccionada()}</p>
+            """
+        self.accionesHtml = accionesHtml
+
+    @app.post("/tomar-accion-requerida")
+    async def tomarAccionRequerida(
+        request: Request,
+        gestor = Depends(get_gestor)
+    ):
+        form_data = await request.form()
+        accionSeleccionada = form_data._dict["accionSeleccionada"]
+        gestor.tomarSeleccionAccionRequerida(accionSeleccionada)
+        gestor.getPantallaOperador().pedirSeleccionAccionRequerida(
+            gestor.getAcciones(),
+            True,
+            gestor,
+        )
+        html = (
+            gestor.pantallaOperador.titulo +
+            gestor.pantallaOperador.datosLlamadaHtml +
+            gestor.pantallaOperador.validacionesHtml + 
+            gestor.pantallaOperador.respuestaOperadorHtml +
+            gestor.pantallaOperador.accionesHtml
+        )
+        return HTMLResponse(content=html)
+
+
+    @app.post("/tomar-respuesta-validacion")
+    async def tomarRespuestaValidacion(
+        request: Request,
+        gestor = Depends(get_gestor)
+    ):
+        form_data = await request.form()
+        respuestas = form_data._dict
+        validaciones, errores = gestor.tomarRespuestasValidaciones(respuestas)
+        gestor.getPantallaOperador().mostrarValidaciones(validaciones, errores)
+        gestor.getPantallaOperador().pedirRespuestaOperador()
+        html = (
+            gestor.pantallaOperador.titulo +
+            gestor.pantallaOperador.datosLlamadaHtml +
+            gestor.pantallaOperador.validacionesHtml + 
+            gestor.pantallaOperador.respuestaOperadorHtml
+        )
+        return HTMLResponse(content=html)
+
+    @app.post("/tomar-respuesta-operador")
+    async def tomarRespuestaOperador(
+        request: Request,
+        gestor = Depends(get_gestor)
+    ):
+        form_data = await request.form()
+        respuesta = form_data._dict
+        gestor.tomarRespuesta(respuesta['respuestaOperador'])
+        gestor.getPantallaOperador().pedirRespuestaOperador(True, gestor)
+        acciones = gestor.getAcciones()
+        gestor.getPantallaOperador().pedirSeleccionAccionRequerida(acciones, False, gestor)
+        html = (
+            gestor.pantallaOperador.titulo +
+            gestor.pantallaOperador.datosLlamadaHtml +
+            gestor.pantallaOperador.validacionesHtml + 
+            gestor.pantallaOperador.respuestaOperadorHtml +
+            gestor.pantallaOperador.accionesHtml
+        )
+        return HTMLResponse(content=html)
 
 @app.get("/")
-def main():
-    pantallaOperador = PantallaOperador()
-    gestorRegistrarRespuestaOperador = GestorRegistrarRespuestaOperador(pantallaOperador)
-
-    # agregar parametros
-    llamada = Llamada()
-    categoriaLlamada = CategoriaLlamada()
-    opcionLlamada = OpcionLlamada()
-    subOpcionLlamada = SubOpcionLlamada()
-
-    gestorRegistrarRespuestaOperador.comunicarseConOperador(
+def main(
+    gestor = Depends(get_gestor)
+):
+    cliente = Cliente(nombre="Lionel Messi")
+    validaciones = [
+        Validacion(nombre="Fecha de nacimiento", nroOrden=1),
+        Validacion(nombre="Cantidad de hijos", nroOrden=2),
+    ]
+    subOpcionLlamada = SubOpcionLlamada(nombre="Cancelar tarjeta", validaciones=validaciones)
+    opcionLlamada = OpcionLlamada(nombre="Tarjetas")
+    categoriaLlamada = CategoriaLlamada(nombre="Reclamos")
+    llamada = Llamada(cliente=cliente, subOpcionLlamada=subOpcionLlamada)
+    gestor.comunicarseConOperador(
         llamada=llamada,
         categoriaLlamada=categoriaLlamada,
         opcionLlamada=opcionLlamada,
         subOpcionLlamada=subOpcionLlamada
     )
+
+    html = (
+        gestor.pantallaOperador.titulo +
+        gestor.pantallaOperador.datosLlamadaHtml +
+        gestor.pantallaOperador.validacionesHtml
+    )
+    return HTMLResponse(content=html)
