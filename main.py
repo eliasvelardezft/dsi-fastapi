@@ -96,7 +96,7 @@ class InformacionCliente:
             cls(
                 "Cantidad de hijos",
                 Validacion("Cantidad de hijos", 2),
-                OpcionValidacion("2", True)
+                OpcionValidacion("3", True)
             ),
         ]
 
@@ -311,10 +311,7 @@ class GestorRegistrarRespuestaOperador:
             Accion("Cancelar tarjeta"),
             Accion("Reintegrar dinero"),
         ]
-        # self.informacionesCliente = [
-        #     InformacionCliente("Fecha de nacimiento"),
-        #     InformacionCliente("Cantidad de hijos"),
-        # ]
+        self.setValidacionesValidadas(False)
         self.estados = [
             Estado("iniciada"),
             Estado("enCurso"),
@@ -380,7 +377,15 @@ class GestorRegistrarRespuestaOperador:
         for respuestaValidacion in respuestas.items():
             errores[respuestaValidacion[0]] = self.validarRespuesta(respuestaValidacion)
         validaciones = self.getSubOpcionLlamada().getValidaciones()
+        if all(errores.values()):
+            self.setValidacionesValidadas(True)
         return validaciones, errores
+
+    def setValidacionesValidadas(self, validacionesValidadas: bool):
+        self.validacionesValidadas = validacionesValidadas
+
+    def getValidacionesValidadas(self) -> bool:
+        return self.validacionesValidadas
 
     def setDescripcionOperador(self, respuesta: str):
         self.descripcionOperador = respuesta
@@ -410,8 +415,9 @@ class GestorRegistrarRespuestaOperador:
         exitoCURegistrarAccionRequerida = gestorRegistrarAccionRequerida.iniciarCU(
             self.getAccionSeleccionada()
         )
+
         pantallaOperador = self.getPantallaOperador()
-        pantallaOperador.informarExitoRegistroAccionRequerida()
+        pantallaOperador.informarExitoRegistroAccionRequerida(exitoCURegistrarAccionRequerida)
 
         estadoFinalizada = self.buscarEstadoParaAsignar("finalizada")
         fechaHoraActual = self.obtenerFechaHoraActual()
@@ -431,8 +437,14 @@ class GestorRegistrarRespuestaOperador:
     def getValidacionesOrdenadas(self) -> list[Validacion]:
         return self.validacionesOrdenadas
 
+    def setConfirmacion(self, confirmacion: bool):
+        self.confirmacion = confirmacion
+
+    def tomarConfirmacion(self, confirmacion: bool):
+        self.setConfirmacion(confirmacion)
+
     def finCu(self):
-        pass        
+        pass
     
     def comunicarseConOperador(
         self,
@@ -463,26 +475,6 @@ class GestorRegistrarRespuestaOperador:
         validacionesOrdenadas = self.ordernarValidaciones(validaciones)
         self.setValidacionesOrdenadas(validacionesOrdenadas)
         pantallaOperador.mostrarValidaciones(validacionesOrdenadas)
-
-        # for validacion in validacionesOrdenadas:
-        #     pantallaOperador.pedirRespuestaValidacion(validacion)
-            # if not self.validarRespuesta(self.getUltimaRespuestaValidacion()):
-            #     raise Exception(
-            #         "Respuesta invalida",
-            #         nombreValidacion=validacion.getNombre()
-            #     )
-        
-        # pantallaOperador.pedirRespuesta()
-
-        # acciones = self.buscarAcciones()
-        
-        # # pantallaOperador.pedirSeleccionAccionRequerida(acciones)
-        # # pantallaOperador.solicitarConfirmacion()
-
-        # self.registrarFinLlamada()
-
-        # self.finCu()
-
 
     def getDatosLlamada(self):
         llamada = self.getLlamada()
@@ -529,6 +521,7 @@ class PantallaOperador:
     datosLlamadaHtml: str = "<h1>Datos de la llamada</h1>"
     validacionesHtml: str = "<h1>Validaciones</h1>"
     accionesHtml: str = "<h1>Acciones</h1>"
+    respuestaOperadorHtml: str = ""
 
     def mostrarDatosLlamada(self, datosLlamada: dict, gestor):
         datosLlamadaHtml = f"""
@@ -562,6 +555,25 @@ class PantallaOperador:
             """
         self.validacionesHtml = validacionesHtml
 
+    @app.post("/tomar-respuesta-validacion")
+    async def tomarRespuestaValidacion(
+        request: Request,
+        gestor = Depends(get_gestor)
+    ):
+        form_data = await request.form()
+        respuestas = form_data._dict
+        validaciones, errores = gestor.tomarRespuestasValidaciones(respuestas)
+        gestor.getPantallaOperador().mostrarValidaciones(validaciones, errores)
+        if gestor.getValidacionesValidadas():
+            gestor.getPantallaOperador().pedirRespuestaOperador()
+        html = (
+            gestor.pantallaOperador.titulo +
+            gestor.pantallaOperador.datosLlamadaHtml +
+            gestor.pantallaOperador.validacionesHtml + 
+            gestor.pantallaOperador.respuestaOperadorHtml
+        )
+        return HTMLResponse(content=html)
+
     def pedirRespuestaOperador(self, fueTomada = False, gestor = None):
         if not fueTomada:
             respuestaOperadorHtml = """     
@@ -576,6 +588,26 @@ class PantallaOperador:
                 <p style="color: green">Respuesta del operador tomada: {gestor.getDescripcionOperador()}</p>
             """
         self.respuestaOperadorHtml = respuestaOperadorHtml
+
+    @app.post("/tomar-respuesta-operador")
+    async def tomarRespuestaOperador(
+        request: Request,
+        gestor = Depends(get_gestor)
+    ):
+        form_data = await request.form()
+        respuesta = form_data._dict
+        gestor.tomarRespuesta(respuesta['respuestaOperador'])
+        gestor.getPantallaOperador().pedirRespuestaOperador(True, gestor)
+        acciones = gestor.getAcciones()
+        gestor.getPantallaOperador().pedirSeleccionAccionRequerida(acciones, False, gestor)
+        html = (
+            gestor.pantallaOperador.titulo +
+            gestor.pantallaOperador.datosLlamadaHtml +
+            gestor.pantallaOperador.validacionesHtml + 
+            gestor.pantallaOperador.respuestaOperadorHtml +
+            gestor.pantallaOperador.accionesHtml
+        )
+        return HTMLResponse(content=html)
 
     def pedirSeleccionAccionRequerida(
             self,
@@ -616,53 +648,59 @@ class PantallaOperador:
             True,
             gestor,
         )
+        gestor.getPantallaOperador().solicitarConfirmacion()
         html = (
             gestor.pantallaOperador.titulo +
             gestor.pantallaOperador.datosLlamadaHtml +
             gestor.pantallaOperador.validacionesHtml + 
             gestor.pantallaOperador.respuestaOperadorHtml +
-            gestor.pantallaOperador.accionesHtml
+            gestor.pantallaOperador.accionesHtml + 
+            gestor.pantallaOperador.confirmacionHtml
         )
         return HTMLResponse(content=html)
 
+    def solicitarConfirmacion(self, confirmada: bool = False):
+        if not confirmada:
+            confirmacionHtml = """
+                <form action="/tomar-confirmacion" method="POST" style="margin: 25px">
+                    <button type="submit">Confirmar</button>
+                </form>
+            """
+        else:
+            confirmacionHtml = """
+                <p style="color: green">Confirmación tomada</p>
+            """
 
-    @app.post("/tomar-respuesta-validacion")
-    async def tomarRespuestaValidacion(
-        request: Request,
-        gestor = Depends(get_gestor)
-    ):
-        form_data = await request.form()
-        respuestas = form_data._dict
-        validaciones, errores = gestor.tomarRespuestasValidaciones(respuestas)
-        gestor.getPantallaOperador().mostrarValidaciones(validaciones, errores)
-        gestor.getPantallaOperador().pedirRespuestaOperador()
-        html = (
-            gestor.pantallaOperador.titulo +
-            gestor.pantallaOperador.datosLlamadaHtml +
-            gestor.pantallaOperador.validacionesHtml + 
-            gestor.pantallaOperador.respuestaOperadorHtml
-        )
-        return HTMLResponse(content=html)
+        self.confirmacionHtml = confirmacionHtml
 
-    @app.post("/tomar-respuesta-operador")
-    async def tomarRespuestaOperador(
+    @app.post("/tomar-confirmacion")
+    async def tomarConfirmacion(
         request: Request,
-        gestor = Depends(get_gestor)
+        gestor=Depends(get_gestor)
     ):
-        form_data = await request.form()
-        respuesta = form_data._dict
-        gestor.tomarRespuesta(respuesta['respuestaOperador'])
-        gestor.getPantallaOperador().pedirRespuestaOperador(True, gestor)
-        acciones = gestor.getAcciones()
-        gestor.getPantallaOperador().pedirSeleccionAccionRequerida(acciones, False, gestor)
+        gestor.tomarConfirmacion(True)
+        gestor.getPantallaOperador().solicitarConfirmacion(True)
+        gestor.registrarFinLlamada()
         html = (
             gestor.pantallaOperador.titulo +
             gestor.pantallaOperador.datosLlamadaHtml +
             gestor.pantallaOperador.validacionesHtml + 
             gestor.pantallaOperador.respuestaOperadorHtml +
-            gestor.pantallaOperador.accionesHtml
+            gestor.pantallaOperador.accionesHtml + 
+            gestor.pantallaOperador.confirmacionHtml + 
+            gestor.pantallaOperador.exitoCURegistrarAccionRequeridaHtml
         )
         return HTMLResponse(content=html)
+
+    def informarExitoRegistroAccionRequerida(self, exito: bool = False):
+        if exito:
+            exitoCURegistrarAccionRequeridaHtml = """
+                <p style="color: green">Registro de accion requerida finalizado con exito.</p>
+            """
+        else:
+            exitoCURegistrarAccionRequeridaHtml = ""
+        self.exitoCURegistrarAccionRequeridaHtml = exitoCURegistrarAccionRequeridaHtml
+
 
 @app.get("/")
 def main(
